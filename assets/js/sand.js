@@ -133,13 +133,13 @@
     var c = r.top + r.height / 2;
     var q = clamp((vh * 0.28 - c) / (vh * 0.42));
     if (q > 0) return 1 + q;
-    var p = clamp((vh * 1.02 - c) / (vh * 0.42));
     if (this.intro !== null) {
-      // Hero pictures assemble on load; on small screens they may sit below the fold.
-      var t = clamp((now - t0 - this.intro * 1000) / 2200);
-      return Math.min(p, 1 - (1 - t) * (1 - t));
+      // Hero pictures assemble once by time, as soon as they show up on screen.
+      if (!this.introAt && r.top < vh * 0.9) this.introAt = Math.max(now, t0 + this.intro * 1000);
+      var t = this.introAt ? clamp((now - this.introAt) / 2200) : 0;
+      return 1 - (1 - t) * (1 - t);
     }
-    return p;
+    return clamp((vh * 1.02 - c) / (vh * 0.42));
   };
 
   Sand.prototype.render = function () {
