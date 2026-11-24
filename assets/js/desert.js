@@ -135,9 +135,13 @@
 
     // Sun disc in 3 px strips, each shifted a little: heat haze.
     var size = sunImg.width / dpr, top = sy - size / 2, left = sx - size / 2;
-    var strip = 3;
-    for (var y = 0; y < size; y += strip) {
-      var off = Math.sin(t * 2.2 + y * 0.09) * (0.6 + 1.4 * (y / size));
+    // Thin strips with short ripples; the top stays round, the haze grows towards the ground.
+    var strip = 1, calm = Math.floor(size * 0.55);
+    ctx.drawImage(sunImg, 0, 0, sunImg.width, calm * dpr, left, top, size, calm);
+    for (var y = calm; y < size; y += strip) {
+      var h = y / size;
+      var amp = 1.75 * Math.pow((h - 0.55) / 0.45, 2);
+      var off = (Math.sin(t * 3.1 + y * 0.42) * 0.65 + Math.sin(t * 1.7 - y * 0.23) * 0.35) * amp;
       ctx.drawImage(sunImg, 0, y * dpr, sunImg.width, strip * dpr, left + off, top + y, size, strip);
     }
 
