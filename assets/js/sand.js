@@ -87,9 +87,10 @@
     var ox = new Float32Array(n), oy = new Float32Array(n);
     var sw = new Float32Array(n);
     var dIn = new Float32Array(n), dOut = new Float32Array(n);
+    var rIn = new Float32Array(n), rOut = new Float32Array(n);
     var col = new Uint8Array(n * 4), sand = new Uint8Array(n * 3);
 
-    var k = 0, fromRight = this.from === 'right';
+    var k = 0, aIn = 0, fromRight = this.from === 'right';
     for (var r = 0; r < rows; r++) {
       for (var c = 0; c < cols; c++) {
         var p = (r * cols + c) * 4;
@@ -101,16 +102,21 @@
         if (fromRight) {
           ix[k] = (0.25 + rnd() * 0.55) * W * RES;
           iy[k] = (rnd() - 0.5) * H * 0.5 * RES;
-          dIn[k] = 0.4 * (1 - xr) + 0.15 * rnd();
+          aIn = 1 - xr;
         } else {
           ix[k] = (rnd() - 0.5) * W * 0.3 * RES;
           iy[k] = -(0.3 + rnd() * 0.5) * H * RES;
-          dIn[k] = 0.38 * (1 - yr) + 0.17 * rnd();
+          aIn = 1 - yr;
         }
-        // Crumble: grains fall and drift with the wind, bottom-right corner goes first.
+        // Settling sweeps along aIn (0 lands first). The sharp image is revealed under
+        // the grains right behind that front: see revealIn() / revealOut().
+        dIn[k] = 0.38 * aIn + 0.17 * rnd();
+        rIn[k] = 0.38 * aIn + 0.57;
+        // Crumble: grains fall and drift with the wind, the bottom goes first.
         ox[k] = (rnd() * 0.45 - 0.08) * W * RES;
         oy[k] = (0.25 + rnd() * 0.65) * H * RES;
-        dOut[k] = 0.25 * (1 - yr) + 0.15 * (1 - xr) + 0.15 * rnd();
+        rOut[k] = 0.38 * (1 - yr) + 0.06;
+        dOut[k] = rOut[k] + 0.11 * rnd();
         sw[k] = (rnd() - 0.5) * 50 * RES;
         col[k * 4] = data[p]; col[k * 4 + 1] = data[p + 1]; col[k * 4 + 2] = data[p + 2]; col[k * 4 + 3] = a;
         var s = SAND[(rnd() * SAND.length) | 0];
@@ -120,8 +126,10 @@
     }
     this.n = n;
     this.tx = tx; this.ty = ty; this.ix = ix; this.iy = iy; this.ox = ox; this.oy = oy;
-    this.sw = sw; this.dIn = dIn; this.dOut = dOut; this.col = col; this.sand = sand;
-    this.block = Math.max(1, Math.ceil(step * RES));
+    this.sw = sw; this.dIn = dIn; this.dOut = dOut; this.rIn = rIn; this.rOut = rOut;
+    this.col = col; this.sand = sand;
+    img.style.webkitMaskImage = img.style.maskImage = 'linear-gradient(transparent, transparent)';
+    this.el.style.setProperty('--img', '1');
     this.ready = true;
     this.drawn = -2;
     this.el.classList.add('is-ready');
@@ -142,15 +150,32 @@
     return clamp((vh * 1.02 - c) / (vh * 0.42));
   };
 
+  // Mask on the real <img>: it shows in full quality right behind the sand front,
+  // with a soft edge, so there is never a blocky low-res stage.
+  Sand.prototype.mask = function (settling, p) {
+    var css;
+    if (settling) {
+      // pixel at axis a is opaque once p >= 0.38a + 0.62, clear while p <= 0.38a + 0.52
+      var s1 = (p - 0.62) / 0.38 * 100, s2 = (p - 0.52) / 0.38 * 100;
+      css = 'linear-gradient(' + (this.from === 'right' ? 'to left' : 'to top') +
+        ', #000 ' + s1.toFixed(2) + '%, transparent ' + s2.toFixed(2) + '%)';
+    } else {
+      var e1 = (p - 0.11) / 0.38 * 100, e2 = (p - 0.01) / 0.38 * 100;
+      css = 'linear-gradient(to top, transparent ' + e1.toFixed(2) + '%, #000 ' + e2.toFixed(2) + '%)';
+    }
+    return css;
+  };
+
   Sand.prototype.render = function () {
     var u = this.u;
     var whole = Math.abs(u - 1) < 0.001;
-    var imgOpacity = u <= 1 ? clamp((u - 0.86) / 0.13) : clamp(1 - (u - 1) / 0.03);
-    if (whole) imgOpacity = 1;
-    this.el.style.setProperty('--img', imgOpacity.toFixed(3));
+    var st = this.img.style;
     this.el.style.setProperty('--p', (u <= 1 ? u : 2 - u).toFixed(3));
 
     var showCanvas = !whole && u > 0.0005 && u < 1.9995;
+    var m = whole ? 'none' : !showCanvas ? 'linear-gradient(transparent, transparent)' : this.mask(u <= 1, u <= 1 ? u : u - 1);
+    st.webkitMaskImage = m;
+    st.maskImage = m;
     this.canvas.style.display = showCanvas ? 'block' : 'none';
     if (!showCanvas) return;
 
@@ -160,30 +185,40 @@
     var settling = u <= 1;
     var p = settling ? u : u - 1;
     var dl = settling ? this.dIn : this.dOut;
+    var rv = settling ? this.rIn : this.rOut;
     var vx = settling ? this.ix : this.ox, vy = settling ? this.iy : this.oy;
-    var block = this.block, fine = RES > 1.2 ? 2 : 1;
+    var size = RES > 1.2 ? 2 : 1;
 
     for (var i = 0; i < n; i++) {
-      var lp = (p - dl[i]) / SPAN;
-      lp = lp < 0 ? 0 : lp > 1 ? 1 : lp;
-      var k, x, y, m, fade;
+      var k, x, y, mv, fade, lp;
       if (settling) {
-        // k = how settled this grain is
-        k = 1 - (1 - lp) * (1 - lp) * (1 - lp);
+        // the grain dissolves into the sharp image once the image is there
+        var gone = (p - rv[i]) / 0.08;
+        if (gone >= 1) continue;
+        lp = (p - dl[i]) / SPAN;
         if (lp <= 0) continue;
-        m = 1 - k;
-        x = tx[i] + vx[i] * m + Math.sin(k * 3.1416) * sw[i];
-        y = ty[i] + vy[i] * m;
+        if (lp > 1) lp = 1;
+        k = 1 - (1 - lp) * (1 - lp) * (1 - lp); // how settled
+        mv = 1 - k;
+        x = tx[i] + vx[i] * mv + Math.sin(k * 3.1416) * sw[i];
+        y = ty[i] + vy[i] * mv;
         fade = lp * 5 > 1 ? 1 : lp * 5;
+        if (gone > 0) fade *= 1 - gone;
       } else {
+        // the grain shows up just before the image under it fades out, then flies off
+        var pre = (p - rv[i] + 0.06) / 0.06;
+        if (pre <= 0) continue;
+        lp = (p - dl[i]) / SPAN;
         if (lp >= 1) continue;
-        m = lp * lp;
+        if (lp < 0) lp = 0;
+        mv = lp * lp;
         k = 1 - lp;
-        x = tx[i] + vx[i] * m + Math.sin(lp * 3.1416) * sw[i];
-        y = ty[i] + vy[i] * m;
+        x = tx[i] + vx[i] * mv + Math.sin(lp * 3.1416) * sw[i];
+        y = ty[i] + vy[i] * mv;
         fade = (1 - lp) * 3 > 1 ? 1 : (1 - lp) * 3;
+        if (pre < 1) fade *= pre;
       }
-      var mix = k * k * k * k; // grains stay golden until they are almost in place
+      var mix = k * k; // golden in flight, takes the picture's colour as it lands
       var j = i * 4, s = i * 3;
       var R = sand[s] + (col[j] - sand[s]) * mix;
       var G = sand[s + 1] + (col[j + 1] - sand[s + 1]) * mix;
@@ -191,13 +226,11 @@
       var A = (235 + (col[j + 3] - 235) * mix) * fade;
       var px = (R & 255) | ((G & 255) << 8) | ((B & 255) << 16) | ((A & 255) << 24);
 
-      var size = k > 0.92 ? block : fine;
       var x0 = (x - size / 2) | 0, y0 = (y - size / 2) | 0;
       if (x0 < 0 || y0 < 0 || x0 + size > cw || y0 + size > ch) continue;
-      for (var yy = 0; yy < size; yy++) {
-        var row = (y0 + yy) * cw + x0;
-        for (var xx = 0; xx < size; xx++) buf[row + xx] = px;
-      }
+      var row = y0 * cw + x0;
+      buf[row] = px;
+      if (size === 2) { buf[row + 1] = px; buf[row + cw] = px; buf[row + cw + 1] = px; }
     }
     this.ctx.putImageData(this.frame, 0, 0);
   };
